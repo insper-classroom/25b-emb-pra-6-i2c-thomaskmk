@@ -14,8 +14,16 @@
 #define SAMPLE_PERIOD (0.01f) // replace this with actual sample period
 
 const int MPU_ADDRESS = 0x68;
-const int I2C_SDA_GPIO = 4;
-const int I2C_SCL_GPIO = 5;
+const int I2C_SDA_GPIO = 16;
+const int I2C_SCL_GPIO = 17;
+
+QueueHandle_t xQueuePos;
+
+typedef struct adc {
+    int axis;
+    int val;
+} adc_t;
+
 
 static void mpu6050_reset() {
     // Two byte reset. First byte register, second byte data
@@ -70,21 +78,77 @@ void mpu6050_task(void *p) {
     mpu6050_reset();
     int16_t acceleration[3], gyro[3], temp;
 
-    while(1) {
-        // leitura da MPU, sem fusao de dados
-        mpu6050_read_raw(acceleration, gyro, &temp);
-        printf("Acc. X = %d, Y = %d, Z = %d\n", acceleration[0], acceleration[1], acceleration[2]);
-        printf("Gyro. X = %d, Y = %d, Z = %d\n", gyro[0], gyro[1], gyro[2]);
-        printf("Temp. = %f\n", (temp / 340.0) + 36.53);
+    FusionAhrs ahrs;
+    FusionAhrsInitialise(&ahrs);
+    
+    while (true) { 
 
+        mpu6050_read_raw(acceleration, gyro, &temp);
+        FusionVector gyroscope = {
+            .axis.x = gyro[0] / 131.0f, // Conversão para graus/s
+            .axis.y = gyro[1] / 131.0f,
+            .axis.z = gyro[2] / 131.0f,
+        };
+
+        FusionVector accelerometer = {
+            .axis.x = acceleration[0] / 16384.0f, // Conversão para g
+            .axis.y = acceleration[1] / 16384.0f,
+            .axis.z = acceleration[2] / 16384.0f,
+        };      
+
+        FusionAhrsUpdateNoMagnetometer(&ahrs, gyroscope, accelerometer, SAMPLE_PERIOD);
+
+        const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+
+        // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+
+
+        adc_t data;
+
+        // Pitch: X
+        float X = euler.angle.pitch;
+        if (X > -8 && X < 8 ) X = 0;
+        
+        data.axis = 0;
+        data.val = (int)X;
+
+        //printf("X: %f\n", X);
+
+        if (X) xQueueSend(xQueuePos, &data, 0);
+
+        // Roll: Y
+        float Y = euler.angle.roll;
+        if (Y > -8 && Y < 8) Y = 0;
+
+        data.axis = 1;
+        data.val = (int)Y; 
+
+        if (Y) xQueueSend(xQueuePos, &data, 0);
+
+        
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void uart_task(void *p) {
+    adc_t data;
+
+    while (1) {
+        if (xQueueReceive(xQueuePos, &data, pdMS_TO_TICKS(100))) {
+            uart_putc_raw(uart0, data.axis);
+            uart_putc_raw(uart0, data.val);
+            uart_putc_raw(uart0, data.val >> 8);
+            uart_putc_raw(uart0, -1);
+        }        
     }
 }
 
 int main() {
     stdio_init_all();
 
+    xQueuePos = xQueueCreate(3, sizeof(adc_t));
     xTaskCreate(mpu6050_task, "mpu6050_Task 1", 8192, NULL, 1, NULL);
+    xTaskCreate(uart_task, "UART Task 1", 8192, NULL, 1, NULL);
 
     vTaskStartScheduler();
 
