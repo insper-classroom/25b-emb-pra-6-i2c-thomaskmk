@@ -11,7 +11,7 @@
 #include "mpu6050.h"
 
 #include "Fusion.h"
-#define SAMPLE_PERIOD (0.01f) // replace this with actual sample period
+#define SAMPLE_PERIOD (0.1f) // replace this with actual sample period
 
 const int MPU_ADDRESS = 0x68;
 const int I2C_SDA_GPIO = 16;
@@ -102,6 +102,7 @@ void mpu6050_task(void *p) {
 
         // printf("Roll %0.1f, Pitch %0.1f, Yaw %0.1f\n", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
+        // printf("Acc X: %d, Acc Y: %d, Acc Z: %d\n", acceleration[0], acceleration[1], acceleration[2]);
 
         adc_t data;
 
@@ -123,9 +124,17 @@ void mpu6050_task(void *p) {
         data.axis = 1;
         data.val = (int)Y; 
 
+        //printf("Y: %f\n", Y);
+
         if (Y) xQueueSend(xQueuePos, &data, 0);
 
-        
+        // CLICK
+        if (acceleration[0] > 4000) {
+            data.axis = 2;
+            data.val = 1; // CLICK
+            xQueueSend(xQueuePos, &data, 0);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -152,6 +161,5 @@ int main() {
 
     vTaskStartScheduler();
 
-    while (true)
-        ;
+    while (true);
 }
